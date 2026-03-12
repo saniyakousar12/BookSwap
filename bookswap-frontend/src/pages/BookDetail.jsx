@@ -9,9 +9,11 @@ import ReviewModal from '../components/reviews/ReviewModal';
 import StarRating from '../components/reviews/StarRating';
 import { 
   Heart, ChevronLeft, IndianRupee, Repeat, HandHeart, HandCoins, 
-  BookOpen, MessageCircle, Star, Users, Clock, CheckCircle 
+  BookOpen, MessageCircle, Star, Users, Clock, CheckCircle, Edit,
+  AlertCircle, StarHalf
 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
+import toast from 'react-hot-toast';
 
 export default function BookDetail() {
   const { id } = useParams();
@@ -30,7 +32,12 @@ export default function BookDetail() {
   } = useBookStore();
 
   // Transaction store
-  const { fetchMyRequests } = useTransactionStore();
+  const { 
+    fetchMyRequests, 
+    fetchReceivedRequests,
+    myRequests,
+    receivedRequests 
+  } = useTransactionStore();
 
   // Review store
   const { 
@@ -40,7 +47,6 @@ export default function BookDetail() {
     fetchBookReviews,
     fetchAverageRating,
     fetchReviewCount,
-    createBookReview,
     isLoading: reviewLoading
   } = useReviewStore();
 
@@ -49,9 +55,11 @@ export default function BookDetail() {
   const [showRequestModal, setShowRequestModal] = useState(false);
   const [showReviewModal, setShowReviewModal] = useState(false);
   const [hasRequested, setHasRequested] = useState(false);
+  const [hasCompletedTransaction, setHasCompletedTransaction] = useState(false);
   const [userRating, setUserRating] = useState(null);
   const [reviewsPage, setReviewsPage] = useState(0);
   const [hasMoreReviews, setHasMoreReviews] = useState(true);
+  const [loading, setLoading] = useState(false);
 
   // Fetch book on mount or when id changes
   useEffect(() => {
@@ -66,16 +74,66 @@ export default function BookDetail() {
     }
   }, [selectedBook]);
 
+  // Load transaction data when user and book are available
+  useEffect(() => {
+    if (user && selectedBook) {
+      checkTransactionStatus();
+    }
+  }, [user, selectedBook, myRequests, receivedRequests]);
+
   const loadReviews = async (page = 0) => {
-    const data = await fetchBookReviews(selectedBook.id, page, 5);
-    if (data) {
-      setHasMoreReviews(!data.last);
+    if (!selectedBook) return;
+    try {
+      const data = await fetchBookReviews(selectedBook.id, page, 5);
+      if (data) {
+        setHasMoreReviews(!data.last);
+      }
+    } catch (error) {
+      console.error('Error loading reviews:', error);
     }
   };
 
   const loadRating = async () => {
-    await fetchAverageRating(selectedBook.id);
-    await fetchReviewCount(selectedBook.id);
+    if (!selectedBook) return;
+    try {
+      await fetchAverageRating(selectedBook.id);
+      await fetchReviewCount(selectedBook.id);
+    } catch (error) {
+      console.error('Error loading ratings:', error);
+    }
+  };
+
+  const checkTransactionStatus = async () => {
+    if (!user || !selectedBook) return;
+
+    try {
+      // Fetch requests if not already loaded
+      if (myRequests.length === 0) {
+        await fetchMyRequests();
+      }
+      if (receivedRequests.length === 0) {
+        await fetchReceivedRequests();
+      }
+
+      // Check if user has requested this book
+      const userRequest = myRequests.find(req => req.book?.id === selectedBook.id);
+      if (userRequest) {
+        setHasRequested(true);
+        
+        // Check if user has COMPLETED transaction (for review eligibility)
+        if (userRequest.status === 'COMPLETED') {
+          setHasCompletedTransaction(true);
+        }
+      }
+
+      // Check if user has received a request for this book and completed it
+      const receivedRequest = receivedRequests.find(req => req.book?.id === selectedBook.id);
+      if (receivedRequest && receivedRequest.status === 'COMPLETED') {
+        setHasCompletedTransaction(true);
+      }
+    } catch (error) {
+      console.error('Error checking transaction status:', error);
+    }
   };
 
   // Check wishlist status whenever selectedBook or wishlist changes
@@ -86,30 +144,11 @@ export default function BookDetail() {
       
       // Check if current user has already reviewed
       if (user) {
-        const userReview = bookReviews.find(r => r.reviewer.id === user.id);
+        const userReview = bookReviews.find(r => r.reviewer?.id === user.id);
         setUserRating(userReview || null);
       }
     }
   }, [selectedBook, wishlist, id, bookReviews, user]);
-
-  // Check if user has already requested this book
-  useEffect(() => {
-    const checkExistingRequest = async () => {
-      if (user && selectedBook) {
-        try {
-          const requests = await fetchMyRequests();
-          const existingRequest = requests?.content?.some(
-            req => req.book.id === selectedBook.id && 
-                   ['PENDING', 'APPROVED', 'ACTIVE'].includes(req.status)
-          );
-          setHasRequested(existingRequest);
-        } catch (error) {
-          console.error('Error checking existing requests:', error);
-        }
-      }
-    };
-    checkExistingRequest();
-  }, [user, selectedBook]);
 
   const getAvailabilityInfo = (book) => {
     switch(book?.availabilityType) {
@@ -157,33 +196,56 @@ export default function BookDetail() {
   };
 
   const handleWishlist = async () => {
+    if (!user) {
+      toast.error('Please login to add to wishlist');
+      navigate('/login');
+      return;
+    }
+
     try {
+      setLoading(true);
       if (inWishlist) {
         await removeFromWishlist(id);
+        toast.success('Removed from wishlist');
       } else {
         await addToWishlist(id);
+        toast.success('Added to wishlist');
       }
       setInWishlist(!inWishlist);
     } catch (error) {
       console.error('Error:', error);
+      toast.error('Failed to update wishlist');
+    } finally {
+      setLoading(false);
     }
   };
 
   const handleRequestSuccess = () => {
     setHasRequested(true);
     setShowRequestModal(false);
+    toast.success('Request sent successfully!');
+    
+    // Refresh transaction data
+    fetchMyRequests();
+    fetchReceivedRequests();
   };
 
   const handleReviewSuccess = () => {
     loadReviews(0);
     loadRating();
     setShowReviewModal(false);
+    setUserRating({ rating: true }); // Mark that user has reviewed
+    toast.success('Review posted successfully!');
   };
 
   const loadMoreReviews = () => {
     const nextPage = reviewsPage + 1;
     setReviewsPage(nextPage);
     loadReviews(nextPage);
+  };
+
+  const handleViewRequests = () => {
+    navigate('/requests');
   };
 
   if (isLoading || !selectedBook) {
@@ -199,7 +261,9 @@ export default function BookDetail() {
 
   const availabilityInfo = getAvailabilityInfo(selectedBook);
   const isOwner = user?.id === selectedBook.ownerId;
-  const canReview = user && !isOwner && !userRating && !reviewLoading;
+  
+  // FIXED: User can review if they have a COMPLETED transaction and haven't reviewed yet
+  const canReview = user && !isOwner && !userRating && !reviewLoading && hasCompletedTransaction;
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -231,63 +295,102 @@ export default function BookDetail() {
                 )}
               </div>
 
-              {/* Request Button */}
-              {user && !isOwner && selectedBook.isAvailable && !hasRequested && (
+              {/* Action Buttons Container */}
+              <div className="mt-4 space-y-3">
+                {/* Request Button - Show if user is logged in, not the owner, book is available, and not already requested */}
+                {user && !isOwner && selectedBook.isAvailable && !hasRequested && (
+                  <button
+                    onClick={() => setShowRequestModal(true)}
+                    className="w-full py-3 px-4 bg-green-600 text-white rounded-lg font-semibold hover:bg-green-700 transition-colors flex items-center justify-center gap-2"
+                  >
+                    <BookOpen size={20} />
+                    Request This Book
+                  </button>
+                )}
+
+                {/* Already Requested Message */}
+                {user && !isOwner && hasRequested && (
+                  <div className="w-full py-3 px-4 bg-blue-100 text-blue-800 rounded-lg font-semibold text-center flex items-center justify-center gap-2">
+                    <CheckCircle size={18} />
+                    Request Already Sent
+                  </div>
+                )}
+
+                {/* Not Available Message */}
+                {!selectedBook.isAvailable && (
+                  <div className="w-full py-3 px-4 bg-gray-100 text-gray-600 rounded-lg font-semibold text-center flex items-center justify-center gap-2">
+                    <AlertCircle size={18} />
+                    Currently Unavailable
+                  </div>
+                )}
+
+                {/* REVIEW BUTTON - Show after transaction completed */}
+                {canReview && (
+                  <button
+                    onClick={() => setShowReviewModal(true)}
+                    className="w-full py-3 px-4 bg-yellow-500 text-white rounded-lg font-semibold hover:bg-yellow-600 transition-colors flex items-center justify-center gap-2"
+                  >
+                    <Star size={18} />
+                    Rate this Book
+                  </button>
+                )}
+
+                {/* Already Reviewed Message */}
+                {user && !isOwner && userRating && (
+                  <div className="w-full py-3 px-4 bg-green-100 text-green-800 rounded-lg font-semibold text-center flex items-center justify-center gap-2">
+                    <StarHalf size={18} />
+                    You Reviewed This Book
+                  </div>
+                )}
+
+                {/* Wishlist Button */}
                 <button
-                  onClick={() => setShowRequestModal(true)}
-                  className="w-full mt-4 py-3 px-4 bg-green-600 text-white rounded-lg font-semibold hover:bg-green-700 transition-colors flex items-center justify-center gap-2"
+                  onClick={handleWishlist}
+                  disabled={loading}
+                  className={`w-full py-3 px-4 rounded-lg font-semibold transition-all flex items-center justify-center gap-2 ${
+                    inWishlist
+                      ? 'bg-red-100 text-red-600 hover:bg-red-200'
+                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  } disabled:opacity-50 disabled:cursor-not-allowed`}
                 >
-                  <BookOpen size={20} />
-                  Request This Book
+                  <Heart
+                    size={20}
+                    fill={inWishlist ? 'currentColor' : 'none'}
+                  />
+                  {loading ? 'Updating...' : (inWishlist ? 'Remove from Wishlist' : 'Add to Wishlist')}
                 </button>
-              )}
 
-              {/* Already Requested Message */}
-              {user && !isOwner && hasRequested && (
-                <div className="w-full mt-4 py-3 px-4 bg-blue-100 text-blue-800 rounded-lg font-semibold text-center">
-                  Request Already Sent
-                </div>
-              )}
+                {/* View Requests Button (for owner) */}
+                {isOwner && (
+                  <button
+                    onClick={handleViewRequests}
+                    className="w-full py-3 px-4 bg-purple-600 text-white rounded-lg font-semibold hover:bg-purple-700 transition-colors flex items-center justify-center gap-2"
+                  >
+                    <Users size={18} />
+                    View Requests
+                  </button>
+                )}
 
-              {/* Not Available Message */}
-              {!selectedBook.isAvailable && (
-                <div className="w-full mt-4 py-3 px-4 bg-gray-100 text-gray-600 rounded-lg font-semibold text-center">
-                  Currently Unavailable
-                </div>
-              )}
-
-              {/* Wishlist Button */}
-              <button
-                onClick={handleWishlist}
-                className={`w-full mt-4 py-3 px-4 rounded-lg font-semibold transition-all flex items-center justify-center gap-2 ${
-                  inWishlist
-                    ? 'bg-red-100 text-red-600 hover:bg-red-200'
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                }`}
-              >
-                <Heart
-                  size={20}
-                  fill={inWishlist ? 'currentColor' : 'none'}
-                />
-                {inWishlist ? 'Remove from Wishlist' : 'Add to Wishlist'}
-              </button>
+                {/* Edit Book Button (for owner) */}
+                {isOwner && (
+                  <button
+                    onClick={() => navigate(`/edit-book/${selectedBook.id}`)}
+                    className="w-full py-3 px-4 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 transition-colors flex items-center justify-center gap-2"
+                  >
+                    <Edit size={18} />
+                    Edit Book
+                  </button>
+                )}
+              </div>
 
               {/* Rating Summary - Mobile */}
               <div className="md:hidden mt-4 p-4 bg-gray-50 rounded-lg">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <Star className="w-5 h-5 text-yellow-400 fill-yellow-400" />
-                    <span className="font-bold text-lg">{averageRating}</span>
-                    <span className="text-gray-500 text-sm">({reviewCount} reviews)</span>
+                    <span className="font-bold text-lg">{averageRating || 0}</span>
+                    <span className="text-gray-500 text-sm">({reviewCount || 0} reviews)</span>
                   </div>
-                  {canReview && (
-                    <button
-                      onClick={() => setShowReviewModal(true)}
-                      className="text-blue-600 text-sm font-semibold hover:text-blue-800"
-                    >
-                      Write a Review
-                    </button>
-                  )}
                 </div>
               </div>
             </div>
@@ -307,23 +410,14 @@ export default function BookDetail() {
               <div className="hidden md:flex items-center justify-between bg-gray-50 rounded-lg p-4 mb-6">
                 <div className="flex items-center gap-4">
                   <div className="text-center">
-                    <span className="text-3xl font-bold text-gray-800">{averageRating}</span>
+                    <span className="text-3xl font-bold text-gray-800">{averageRating || 0}</span>
                     <span className="text-gray-500">/5</span>
                   </div>
                   <div>
-                    <StarRating rating={averageRating} size={20} />
-                    <p className="text-sm text-gray-500 mt-1">{reviewCount} reviews</p>
+                    <StarRating rating={averageRating || 0} size={20} />
+                    <p className="text-sm text-gray-500 mt-1">{reviewCount || 0} reviews</p>
                   </div>
                 </div>
-                {canReview && (
-                  <button
-                    onClick={() => setShowReviewModal(true)}
-                    className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
-                  >
-                    <MessageCircle size={18} />
-                    Write a Review
-                  </button>
-                )}
               </div>
 
               <div className="grid grid-cols-2 gap-4 mb-6">
@@ -337,7 +431,7 @@ export default function BookDetail() {
                 </div>
                 <div>
                   <p className="text-sm text-gray-500">Language</p>
-                  <p className="font-semibold">{selectedBook.language || 'N/A'}</p>
+                  <p className="font-semibold">{selectedBook.language || 'English'}</p>
                 </div>
                 <div>
                   <p className="text-sm text-gray-500">Publication Year</p>
@@ -369,22 +463,6 @@ export default function BookDetail() {
                     </button>
                   )}
                 </div>
-                {isOwner && (
-                  <div className="mt-2 flex gap-2">
-                    <button
-                      onClick={() => navigate(`/edit-book/${selectedBook.id}`)}
-                      className="text-sm bg-blue-600 text-white px-3 py-1 rounded-lg hover:bg-blue-700"
-                    >
-                      Edit Book
-                    </button>
-                    <button
-                      onClick={() => navigate('/requests')}
-                      className="text-sm bg-purple-600 text-white px-3 py-1 rounded-lg hover:bg-purple-700"
-                    >
-                      View Requests
-                    </button>
-                  </div>
-                )}
               </div>
 
               {/* Description */}
@@ -401,7 +479,7 @@ export default function BookDetail() {
                 
                 {/* Reviews List */}
                 <div className="space-y-6">
-                  {bookReviews.length === 0 ? (
+                  {!bookReviews || bookReviews.length === 0 ? (
                     <div className="text-center py-8 bg-gray-50 rounded-lg">
                       <MessageCircle className="w-12 h-12 text-gray-400 mx-auto mb-3" />
                       <p className="text-gray-500">No reviews yet</p>
@@ -421,19 +499,19 @@ export default function BookDetail() {
                           <div className="flex items-start justify-between mb-2">
                             <div className="flex items-center gap-3">
                               <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center text-white font-bold">
-                                {review.reviewer.firstName?.charAt(0)}
-                                {review.reviewer.lastName?.charAt(0)}
+                                {review.reviewer?.firstName?.charAt(0) || 'U'}
+                                {review.reviewer?.lastName?.charAt(0) || ''}
                               </div>
                               <div>
                                 <p className="font-semibold">
-                                  {review.reviewer.firstName} {review.reviewer.lastName}
+                                  {review.reviewer?.firstName || 'Unknown'} {review.reviewer?.lastName || ''}
                                 </p>
                                 <p className="text-xs text-gray-500">
-                                  {formatDistanceToNow(new Date(review.createdAt), { addSuffix: true })}
+                                  {review.createdAt ? formatDistanceToNow(new Date(review.createdAt), { addSuffix: true }) : 'Recently'}
                                 </p>
                               </div>
                             </div>
-                            <StarRating rating={review.rating} size={16} />
+                            <StarRating rating={review.rating || 0} size={16} />
                           </div>
                           {review.comment && (
                             <p className="text-gray-700 mt-2 ml-13">{review.comment}</p>

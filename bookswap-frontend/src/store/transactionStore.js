@@ -73,7 +73,6 @@ export const useTransactionStore = create((set, get) => ({
       const response = await api.put(`/transactions/${transactionId}/start`);
       await get().fetchMyRequests();
       await get().fetchReceivedRequests();
-      await get().fetchPendingRequests();
       set({ isLoading: false });
       return response.data;
     } catch (error) {

@@ -3,7 +3,10 @@ import { useNavigate } from 'react-router-dom';
 import { useTransactionStore } from '../store/transactionStore';
 import { useAuthStore } from '../store/authStore';
 import { LoadingSpinner } from '../components/common/LoadingSpinner';
-import { Check, X, Clock, Calendar, User, BookOpen, IndianRupee } from 'lucide-react';
+import { 
+  Check, X, Clock, Calendar, User, BookOpen, 
+  IndianRupee, AlertCircle, Eye 
+} from 'lucide-react';
 import toast from 'react-hot-toast';
 
 export default function RequestsPage() {
@@ -25,6 +28,7 @@ export default function RequestsPage() {
   } = useTransactionStore();
 
   const [activeTab, setActiveTab] = useState('received'); // received, sent, pending
+  const [processingId, setProcessingId] = useState(null);
 
   useEffect(() => {
     if (!user) {
@@ -35,21 +39,56 @@ export default function RequestsPage() {
   }, []);
 
   const loadData = async () => {
-    await Promise.all([
-      fetchMyRequests(),
-      fetchReceivedRequests(),
-      fetchPendingRequests()
-    ]);
+    try {
+      await Promise.all([
+        fetchMyRequests(),
+        fetchReceivedRequests(),
+        fetchPendingRequests()
+      ]);
+    } catch (error) {
+      console.error('Error loading requests:', error);
+      toast.error('Failed to load requests');
+    }
   };
 
   const getStatusBadge = (status) => {
     const statusConfig = {
-      PENDING: { bg: 'bg-yellow-100', text: 'text-yellow-800', icon: Clock, label: 'Pending' },
-      APPROVED: { bg: 'bg-blue-100', text: 'text-blue-800', icon: Check, label: 'Approved' },
-      ACTIVE: { bg: 'bg-green-100', text: 'text-green-800', icon: BookOpen, label: 'Active' },
-      COMPLETED: { bg: 'bg-gray-100', text: 'text-gray-800', icon: Check, label: 'Completed' },
-      REJECTED: { bg: 'bg-red-100', text: 'text-red-800', icon: X, label: 'Rejected' },
-      CANCELLED: { bg: 'bg-orange-100', text: 'text-orange-800', icon: X, label: 'Cancelled' },
+      PENDING: { 
+        bg: 'bg-yellow-100', 
+        text: 'text-yellow-800', 
+        icon: Clock, 
+        label: 'Pending' 
+      },
+      APPROVED: { 
+        bg: 'bg-blue-100', 
+        text: 'text-blue-800', 
+        icon: Check, 
+        label: 'Approved' 
+      },
+      ACTIVE: { 
+        bg: 'bg-green-100', 
+        text: 'text-green-800', 
+        icon: BookOpen, 
+        label: 'Active' 
+      },
+      COMPLETED: { 
+        bg: 'bg-gray-100', 
+        text: 'text-gray-800', 
+        icon: Check, 
+        label: 'Completed' 
+      },
+      REJECTED: { 
+        bg: 'bg-red-100', 
+        text: 'text-red-800', 
+        icon: X, 
+        label: 'Rejected' 
+      },
+      CANCELLED: { 
+        bg: 'bg-orange-100', 
+        text: 'text-orange-800', 
+        icon: X, 
+        label: 'Cancelled' 
+      },
     };
 
     const config = statusConfig[status] || statusConfig.PENDING;
@@ -64,65 +103,83 @@ export default function RequestsPage() {
   };
 
   const handleApprove = async (transactionId) => {
+    setProcessingId(transactionId);
     try {
       await approveRequest(transactionId);
       toast.success('Request approved!');
     } catch (error) {
-      toast.error('Failed to approve request');
+      toast.error(error.message || 'Failed to approve request');
+    } finally {
+      setProcessingId(null);
     }
   };
 
   const handleReject = async (transactionId) => {
-    if (window.confirm('Are you sure you want to reject this request?')) {
-      try {
-        await rejectRequest(transactionId);
-        toast.success('Request rejected');
-      } catch (error) {
-        toast.error('Failed to reject request');
-      }
+    if (!window.confirm('Are you sure you want to reject this request?')) return;
+    
+    setProcessingId(transactionId);
+    try {
+      await rejectRequest(transactionId);
+      toast.success('Request rejected');
+    } catch (error) {
+      toast.error(error.message || 'Failed to reject request');
+    } finally {
+      setProcessingId(null);
     }
   };
 
   const handleStart = async (transactionId) => {
+    setProcessingId(transactionId);
     try {
       await startTransaction(transactionId);
       toast.success('Transaction started!');
     } catch (error) {
-      toast.error('Failed to start transaction');
+      toast.error(error.message || 'Failed to start transaction');
+    } finally {
+      setProcessingId(null);
     }
   };
 
   const handleComplete = async (transactionId) => {
+    if (!window.confirm('Has the book been successfully exchanged?')) return;
+    
+    setProcessingId(transactionId);
     try {
       await completeTransaction(transactionId);
       toast.success('Transaction completed!');
     } catch (error) {
-      toast.error('Failed to complete transaction');
+      toast.error(error.message || 'Failed to complete transaction');
+    } finally {
+      setProcessingId(null);
     }
   };
 
   const handleCancel = async (transactionId) => {
-    if (window.confirm('Are you sure you want to cancel this request?')) {
-      try {
-        await cancelRequest(transactionId);
-        toast.success('Request cancelled');
-      } catch (error) {
-        toast.error('Failed to cancel request');
-      }
+    if (!window.confirm('Are you sure you want to cancel this request?')) return;
+    
+    setProcessingId(transactionId);
+    try {
+      await cancelRequest(transactionId);
+      toast.success('Request cancelled');
+    } catch (error) {
+      toast.error(error.message || 'Failed to cancel request');
+    } finally {
+      setProcessingId(null);
     }
   };
 
   const renderTransactionCard = (transaction, type) => {
     const isOwner = type === 'received' || type === 'pending';
     const otherUser = isOwner ? transaction.requester : transaction.owner;
+    const isProcessing = processingId === transaction.id;
 
     return (
       <div key={transaction.id} className="bg-white rounded-lg shadow-md p-6 hover:shadow-lg transition-shadow">
         {/* Header */}
         <div className="flex justify-between items-start mb-4">
           <div>
-            <h3 className="font-bold text-lg mb-1">{transaction.book.title}</h3>
-            <p className="text-gray-600 text-sm">by {transaction.book.author}</p>
+            <h3 className="font-bold text-lg mb-1">{transaction.book?.title}</h3>
+            <p className="text-gray-600 text-sm">by {transaction.book?.author}</p>
           </div>
           {getStatusBadge(transaction.status)}
         </div>
@@ -142,7 +199,7 @@ export default function RequestsPage() {
             <span className="bg-blue-100 text-blue-800 px-2 py-1 rounded-full text-xs">
               {transaction.transactionType}
             </span>
-            {transaction.transactionType === 'RENT' && (
+            {transaction.transactionType === 'RENT' && transaction.totalAmount > 0 && (
               <span className="bg-green-100 text-green-800 px-2 py-1 rounded-full text-xs flex items-center gap-1">
                 <IndianRupee size={12} />
                 ₹{transaction.totalAmount}
@@ -178,17 +235,27 @@ export default function RequestsPage() {
             <>
               <button
                 onClick={() => handleApprove(transaction.id)}
-                className="flex-1 bg-green-600 text-white py-2 rounded-lg text-sm font-semibold hover:bg-green-700 flex items-center justify-center gap-2"
+                disabled={isProcessing}
+                className="flex-1 bg-green-600 text-white py-2 rounded-lg text-sm font-semibold hover:bg-green-700 flex items-center justify-center gap-2 disabled:opacity-50"
               >
-                <Check size={16} />
-                Approve
+                {isProcessing ? 'Processing...' : (
+                  <>
+                    <Check size={16} />
+                    Approve
+                  </>
+                )}
               </button>
               <button
                 onClick={() => handleReject(transaction.id)}
-                className="flex-1 bg-red-600 text-white py-2 rounded-lg text-sm font-semibold hover:bg-red-700 flex items-center justify-center gap-2"
+                disabled={isProcessing}
+                className="flex-1 bg-red-600 text-white py-2 rounded-lg text-sm font-semibold hover:bg-red-700 flex items-center justify-center gap-2 disabled:opacity-50"
               >
-                <X size={16} />
-                Reject
+                {isProcessing ? '...' : (
+                  <>
+                    <X size={16} />
+                    Reject
+                  </>
+                )}
               </button>
             </>
           )}
@@ -197,9 +264,10 @@ export default function RequestsPage() {
           {transaction.status === 'APPROVED' && (
             <button
               onClick={() => handleStart(transaction.id)}
-              className="flex-1 bg-blue-600 text-white py-2 rounded-lg text-sm font-semibold hover:bg-blue-700"
+              disabled={isProcessing}
+              className="flex-1 bg-blue-600 text-white py-2 rounded-lg text-sm font-semibold hover:bg-blue-700 disabled:opacity-50"
             >
-              Start Transaction
+              {isProcessing ? 'Processing...' : 'Start Transaction'}
             </button>
           )}
 
@@ -207,9 +275,10 @@ export default function RequestsPage() {
           {transaction.status === 'ACTIVE' && (
             <button
               onClick={() => handleComplete(transaction.id)}
-              className="flex-1 bg-green-600 text-white py-2 rounded-lg text-sm font-semibold hover:bg-green-700"
+              disabled={isProcessing}
+              className="flex-1 bg-green-600 text-white py-2 rounded-lg text-sm font-semibold hover:bg-green-700 disabled:opacity-50"
             >
-              Mark as Completed
+              {isProcessing ? 'Processing...' : 'Mark as Completed'}
             </button>
           )}
 
@@ -217,18 +286,20 @@ export default function RequestsPage() {
           {!isOwner && (transaction.status === 'PENDING' || transaction.status === 'APPROVED') && (
             <button
               onClick={() => handleCancel(transaction.id)}
-              className="flex-1 bg-orange-600 text-white py-2 rounded-lg text-sm font-semibold hover:bg-orange-700"
+              disabled={isProcessing}
+              className="flex-1 bg-orange-600 text-white py-2 rounded-lg text-sm font-semibold hover:bg-orange-700 disabled:opacity-50"
             >
-              Cancel Request
+              {isProcessing ? 'Processing...' : 'Cancel Request'}
             </button>
           )}
 
           {/* View Details Button */}
           <button
-            onClick={() => navigate(`/book/${transaction.book.id}`)}
-            className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg text-sm font-semibold hover:bg-gray-300"
+            onClick={() => navigate(`/book/${transaction.book?.id}`)}
+            className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg text-sm font-semibold hover:bg-gray-300 flex items-center justify-center gap-1"
           >
-            View Book
+            <Eye size={16} />
+            View
           </button>
         </div>
       </div>
@@ -241,24 +312,24 @@ export default function RequestsPage() {
 
   return (
     <div className="min-h-screen bg-gray-50 py-8">
-      <div className="max-w-7xl mx-auto px-4">
+      <div className="max-w-4xl mx-auto px-4">
         <h1 className="text-3xl font-bold mb-8">Book Requests</h1>
 
         {/* Tab Navigation */}
-        <div className="flex gap-4 mb-8 border-b border-gray-300">
+        <div className="flex gap-4 mb-8 border-b border-gray-300 overflow-x-auto">
           <button
             onClick={() => setActiveTab('received')}
-            className={`px-6 py-3 font-semibold transition-colors ${
+            className={`px-6 py-3 font-semibold transition-colors whitespace-nowrap ${
               activeTab === 'received'
                 ? 'border-b-4 border-blue-600 text-blue-600'
                 : 'text-gray-600 hover:text-gray-800'
             }`}
           >
-            Received Requests ({receivedRequests.length})
+            Received ({receivedRequests.length})
           </button>
           <button
             onClick={() => setActiveTab('pending')}
-            className={`px-6 py-3 font-semibold transition-colors ${
+            className={`px-6 py-3 font-semibold transition-colors whitespace-nowrap ${
               activeTab === 'pending'
                 ? 'border-b-4 border-blue-600 text-blue-600'
                 : 'text-gray-600 hover:text-gray-800'
@@ -268,7 +339,7 @@ export default function RequestsPage() {
           </button>
           <button
             onClick={() => setActiveTab('sent')}
-            className={`px-6 py-3 font-semibold transition-colors ${
+            className={`px-6 py-3 font-semibold transition-colors whitespace-nowrap ${
               activeTab === 'sent'
                 ? 'border-b-4 border-blue-600 text-blue-600'
                 : 'text-gray-600 hover:text-gray-800'
@@ -284,6 +355,7 @@ export default function RequestsPage() {
             <div>
               {receivedRequests.length === 0 ? (
                 <div className="bg-white rounded-lg shadow-md p-12 text-center">
+                  <AlertCircle className="w-12 h-12 text-gray-400 mx-auto mb-4" />
                   <h3 className="text-xl font-bold text-gray-700 mb-2">No requests received</h3>
                   <p className="text-gray-600">When someone requests your books, they'll appear here.</p>
                 </div>
@@ -299,6 +371,7 @@ export default function RequestsPage() {
             <div>
               {pendingRequests.length === 0 ? (
                 <div className="bg-white rounded-lg shadow-md p-12 text-center">
+                  <Clock className="w-12 h-12 text-gray-400 mx-auto mb-4" />
                   <h3 className="text-xl font-bold text-gray-700 mb-2">No pending requests</h3>
                   <p className="text-gray-600">All caught up!</p>
                 </div>
@@ -314,11 +387,12 @@ export default function RequestsPage() {
             <div>
               {myRequests.length === 0 ? (
                 <div className="bg-white rounded-lg shadow-md p-12 text-center">
+                  <BookOpen className="w-12 h-12 text-gray-400 mx-auto mb-4" />
                   <h3 className="text-xl font-bold text-gray-700 mb-2">No requests sent</h3>
-                  <p className="text-gray-600">Browse books and request ones you're interested in!</p>
+                  <p className="text-gray-600 mb-4">Browse books and request ones you're interested in!</p>
                   <button
                     onClick={() => navigate('/browse-books')}
-                    className="mt-4 bg-blue-600 text-white px-6 py-2 rounded-lg font-semibold hover:bg-blue-700"
+                    className="bg-blue-600 text-white px-6 py-2 rounded-lg font-semibold hover:bg-blue-700"
                   >
                     Browse Books
                   </button>

@@ -1,47 +1,65 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useBookStore } from '../store/bookStore';
+import { useSearchStore } from '../store/searchStore';
 import { useAuthStore } from '../store/authStore';
 import { useTransactionStore } from '../store/transactionStore';
 import RequestBookModal from '../components/transactions/RequestBookModal';
 import { LoadingSpinner } from '../components/common/LoadingSpinner';
-import { Heart, MapPin, BookOpen, IndianRupee, Repeat, HandHeart, HandCoins } from 'lucide-react';
+import { Heart, MapPin, BookOpen, IndianRupee, Repeat, HandHeart, HandCoins, Filter, X, Search } from 'lucide-react';
 import toast from 'react-hot-toast';
+import api from '../api/api'; // IMPORT API
+
+const conditions = ['NEW', 'LIKE_NEW', 'GOOD', 'FAIR'];
+const availabilityTypes = ['SWAP', 'BORROW', 'RENT', 'DONATE'];
 
 export default function BrowseBooks() {
   const navigate = useNavigate();
   const { user } = useAuthStore();
+  const { categories, fetchCategories } = useBookStore();
   const {
-    books,
-    categories,
-    isLoading,
-    currentPage,
+    searchResults,
     totalPages,
-    fetchAllBooks,
-    fetchCategories,
-    searchBooks,
-    fetchBooksByCategory,
-    addToWishlist,
-    removeFromWishlist,
-    checkInWishlist,
-    fetchWishlist,
-  } = useBookStore();
+    currentPage,
+    isLoading: searchLoading,
+    priceRange,
+    advancedSearch,
+    simpleSearch,
+    clearSearch,
+    setSearchResults // Make sure this exists in your store
+  } = useSearchStore();
 
+  const { addToWishlist, removeFromWishlist, checkInWishlist, fetchWishlist } = useBookStore();
   const { fetchMyRequests } = useTransactionStore();
 
+  // Search state
   const [searchKeyword, setSearchKeyword] = useState('');
-  const [selectedCategory, setSelectedCategory] = useState('');
+  const [showFilters, setShowFilters] = useState(false);
+  const [selectedBook, setSelectedBook] = useState(null);
+  const [showRequestModal, setShowRequestModal] = useState(false);
+  const [localLoading, setLocalLoading] = useState(false); // Add local loading state
+  
+  // Filter state
+  const [filters, setFilters] = useState({
+    category: '',
+    condition: '',
+    availabilityType: '',
+    minPrice: '',
+    maxPrice: '',
+    availableOnly: true,
+    sortBy: 'createdAt',
+    sortDirection: 'DESC'
+  });
+
   const [wishlistStatus, setWishlistStatus] = useState({});
   const [requestStatus, setRequestStatus] = useState({});
   const [page, setPage] = useState(0);
-  const [selectedBook, setSelectedBook] = useState(null);
-  const [showRequestModal, setShowRequestModal] = useState(false);
 
   // Load initial data
   useEffect(() => {
     const loadInitialData = async () => {
       await fetchCategories();
-      await fetchAllBooks(page);
+      await performSearch(0);
       if (user) {
         await fetchWishlist();
         await loadRequestStatus();
@@ -50,19 +68,19 @@ export default function BrowseBooks() {
     loadInitialData();
   }, []);
 
-  // Update wishlist status when books or wishlist changes
+  // Update wishlist status when results change
   useEffect(() => {
-    if (user) {
+    if (user && searchResults.length > 0) {
       const updateWishlistStatus = () => {
         const newStatus = {};
-        books.forEach((book) => {
+        searchResults.forEach((book) => {
           newStatus[book.id] = checkInWishlist(book.id);
         });
         setWishlistStatus(newStatus);
       };
       updateWishlistStatus();
     }
-  }, [books, user, checkInWishlist]);
+  }, [searchResults, user]);
 
   // Load request status for all books
   const loadRequestStatus = async () => {
@@ -80,46 +98,109 @@ export default function BrowseBooks() {
     }
   };
 
+  const handleInputChange = (e) => {
+    const { name, value, type, checked } = e.target;
+    setFilters(prev => ({
+      ...prev,
+      [name]: type === 'checkbox' ? checked : value
+    }));
+  };
+
+  // FIXED performSearch function
+  const performSearch = async (pageNum = 0) => {
+    setLocalLoading(true);
+    
+    try {
+      const hasSearchCriteria = 
+        searchKeyword.trim() || 
+        filters.category || 
+        filters.condition || 
+        filters.availabilityType || 
+        filters.minPrice || 
+        filters.maxPrice;
+
+      if (hasSearchCriteria) {
+        // Use advanced search with filters
+        const searchParams = {
+          keyword: searchKeyword || undefined,
+          category: filters.category || undefined,
+          condition: filters.condition || undefined,
+          availabilityType: filters.availabilityType || undefined,
+          minPrice: filters.minPrice ? parseFloat(filters.minPrice) : undefined,
+          maxPrice: filters.maxPrice ? parseFloat(filters.maxPrice) : undefined,
+          availableOnly: filters.availableOnly,
+          sortBy: filters.sortBy,
+          sortDirection: filters.sortDirection,
+          page: pageNum,
+          size: 12
+        };
+        
+        await advancedSearch(searchParams);
+      } else {
+        // Fetch all books from the regular books endpoint
+        const response = await api.get('/books', {
+          params: { page: pageNum, size: 12 }
+        });
+        
+        // Update search store with the results
+        if (setSearchResults) {
+          setSearchResults({
+            content: response.data.content || [],
+            totalElements: response.data.totalElements || 0,
+            totalPages: response.data.totalPages || 0,
+            currentPage: response.data.currentPage || pageNum
+          });
+        } else {
+          // Fallback if setSearchResults doesn't exist
+          useSearchStore.setState({
+            searchResults: response.data.content || [],
+            totalElements: response.data.totalElements || 0,
+            totalPages: response.data.totalPages || 0,
+            currentPage: response.data.currentPage || pageNum
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Search error:', error);
+      toast.error('Failed to load books');
+    } finally {
+      setLocalLoading(false);
+    }
+    
+    setPage(pageNum);
+  };
+
   const handleSearch = async (e) => {
     e.preventDefault();
-    if (searchKeyword.trim()) {
-      setPage(0);
-      if (selectedCategory) {
-        await searchBooks(searchKeyword, selectedCategory, 0);
-      } else {
-        await searchBooks(searchKeyword, null, 0);
-      }
-      if (user) {
-        await loadRequestStatus();
-      }
-    }
+    setPage(0);
+    await performSearch(0);
   };
 
   const handleCategoryFilter = async (category) => {
-    setSelectedCategory(category);
+    setFilters(prev => ({ ...prev, category }));
     setPage(0);
-    if (category) {
-      await fetchBooksByCategory(category, 0);
-    } else {
-      await fetchAllBooks(0);
-    }
-    if (user) {
-      await loadRequestStatus();
-    }
+    // Small delay to ensure state is updated
+    setTimeout(() => performSearch(0), 100);
+  };
+
+  const clearAllFilters = () => {
+    setFilters({
+      category: '',
+      condition: '',
+      availabilityType: '',
+      minPrice: '',
+      maxPrice: '',
+      availableOnly: true,
+      sortBy: 'createdAt',
+      sortDirection: 'DESC'
+    });
+    setSearchKeyword('');
+    setPage(0);
+    performSearch(0);
   };
 
   const handlePageChange = async (newPage) => {
-    setPage(newPage);
-    if (selectedCategory) {
-      await fetchBooksByCategory(selectedCategory, newPage);
-    } else if (searchKeyword) {
-      await searchBooks(searchKeyword, selectedCategory || null, newPage);
-    } else {
-      await fetchAllBooks(newPage);
-    }
-    if (user) {
-      await loadRequestStatus();
-    }
+    await performSearch(newPage);
   };
 
   const handleWishlist = async (bookId, e) => {
@@ -202,7 +283,7 @@ export default function BrowseBooks() {
     }
   };
 
-  if (isLoading && books.length === 0) {
+  if ((searchLoading || localLoading) && searchResults.length === 0) {
     return <LoadingSpinner />;
   }
 
@@ -212,33 +293,203 @@ export default function BrowseBooks() {
       <div className="bg-white shadow-md sticky top-16 z-10">
         <div className="max-w-7xl mx-auto px-4 py-6">
           <form onSubmit={handleSearch} className="flex gap-4">
-            <input
-              type="text"
-              placeholder="Search books by title or author..."
-              value={searchKeyword}
-              onChange={(e) => setSearchKeyword(e.target.value)}
-              className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
+            <div className="flex-1 relative">
+              <input
+                type="text"
+                placeholder="Search books by title, author, or ISBN..."
+                value={searchKeyword}
+                onChange={(e) => setSearchKeyword(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
             <button
               type="submit"
-              className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+              className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-2"
             >
+              <Search size={18} />
               Search
             </button>
+            <button
+              type="button"
+              onClick={() => setShowFilters(!showFilters)}
+              className={`px-4 py-2 border rounded-lg flex items-center gap-2 ${
+                showFilters ? 'bg-blue-600 text-white border-blue-600' : 'bg-gray-100 text-gray-700 border-gray-300 hover:bg-gray-200'
+              }`}
+            >
+              <Filter size={18} />
+              Filters
+            </button>
           </form>
+
+          {/* Filters Panel */}
+          {showFilters && (
+            <div className="mt-4 p-4 bg-gray-50 rounded-lg border border-gray-200">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {/* Category Filter */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Category
+                  </label>
+                  <select
+                    name="category"
+                    value={filters.category}
+                    onChange={handleInputChange}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="">All Categories</option>
+                    {categories.map(cat => (
+                      <option key={cat} value={cat}>
+                        {cat.replace(/_/g, ' ')}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Condition Filter */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Condition
+                  </label>
+                  <select
+                    name="condition"
+                    value={filters.condition}
+                    onChange={handleInputChange}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="">Any Condition</option>
+                    {conditions.map(cond => (
+                      <option key={cond} value={cond}>
+                        {cond.replace(/_/g, ' ')}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Availability Type Filter */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Availability Type
+                  </label>
+                  <select
+                    name="availabilityType"
+                    value={filters.availabilityType}
+                    onChange={handleInputChange}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="">All Types</option>
+                    {availabilityTypes.map(type => (
+                      <option key={type} value={type}>
+                        {type}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Price Range */}
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Price Range (₹/day) {priceRange && `- Avg: ₹${priceRange.averagePrice?.toFixed(2)}`}
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="number"
+                      name="minPrice"
+                      value={filters.minPrice}
+                      onChange={handleInputChange}
+                      placeholder="Min"
+                      className="w-1/2 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                    <input
+                      type="number"
+                      name="maxPrice"
+                      value={filters.maxPrice}
+                      onChange={handleInputChange}
+                      placeholder="Max"
+                      className="w-1/2 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                </div>
+
+                {/* Sort Options */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Sort By
+                  </label>
+                  <select
+                    name="sortBy"
+                    value={filters.sortBy}
+                    onChange={handleInputChange}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="createdAt">Date Added</option>
+                    <option value="title">Title</option>
+                    <option value="author">Author</option>
+                    <option value="rentalPricePerDay">Price</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Sort Direction
+                  </label>
+                  <select
+                    name="sortDirection"
+                    value={filters.sortDirection}
+                    onChange={handleInputChange}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="DESC">Descending</option>
+                    <option value="ASC">Ascending</option>
+                  </select>
+                </div>
+
+                <div className="flex items-center">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      name="availableOnly"
+                      checked={filters.availableOnly}
+                      onChange={handleInputChange}
+                      className="w-4 h-4 text-blue-600 rounded"
+                    />
+                    <span className="text-sm text-gray-700">Show only available books</span>
+                  </label>
+                </div>
+              </div>
+
+              {/* Filter Actions */}
+              <div className="flex justify-end gap-3 mt-4">
+                <button
+                  type="button"
+                  onClick={clearAllFilters}
+                  className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-100 flex items-center gap-2"
+                >
+                  <X size={16} />
+                  Clear Filters
+                </button>
+                <button
+                  type="button"
+                  onClick={() => performSearch(0)}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                >
+                  Apply Filters
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
       <div className="max-w-7xl mx-auto px-4 py-8">
         <div className="flex gap-8">
-          {/* Sidebar - Categories */}
-          <div className="w-64">
+          {/* Sidebar - Categories (Quick Filter) */}
+          <div className="w-64 hidden lg:block">
             <div className="bg-white rounded-lg shadow-md p-6 sticky top-32">
               <h3 className="text-xl font-bold mb-4">Categories</h3>
               <button
                 onClick={() => handleCategoryFilter('')}
                 className={`block w-full text-left px-4 py-2 rounded-lg mb-2 ${
-                  selectedCategory === ''
+                  filters.category === ''
                     ? 'bg-blue-600 text-white'
                     : 'hover:bg-gray-100'
                 }`}
@@ -250,7 +501,7 @@ export default function BrowseBooks() {
                   key={category}
                   onClick={() => handleCategoryFilter(category)}
                   className={`block w-full text-left px-4 py-2 rounded-lg mb-2 ${
-                    selectedCategory === category
+                    filters.category === category
                       ? 'bg-blue-600 text-white'
                       : 'hover:bg-gray-100'
                   }`}
@@ -263,8 +514,24 @@ export default function BrowseBooks() {
 
           {/* Books Grid */}
           <div className="flex-1">
+            {/* Results count */}
+            <div className="mb-4 flex justify-between items-center">
+              <p className="text-gray-600">
+                Found {searchResults.length} books
+              </p>
+              {(filters.category || filters.condition || filters.availabilityType || filters.minPrice || filters.maxPrice) && (
+                <button
+                  onClick={clearAllFilters}
+                  className="text-sm text-blue-600 hover:text-blue-800 flex items-center gap-1"
+                >
+                  <X size={14} />
+                  Clear all filters
+                </button>
+              )}
+            </div>
+
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {books.map((book) => {
+              {searchResults.map((book) => {
                 const availability = getAvailabilityBadge(book);
                 const isOwner = user?.id === book.ownerId;
                 const hasRequested = requestStatus[book.id];
@@ -329,7 +596,7 @@ export default function BrowseBooks() {
 
                       {/* Action Buttons */}
                       <div className="flex gap-2">
-                        {/* Request Button - Show if not owner and book is available */}
+                        {/* Request Button */}
                         {!isOwner && book.isAvailable && !hasRequested && (
                           <button
                             onClick={(e) => handleRequestClick(book, e)}
@@ -377,10 +644,17 @@ export default function BrowseBooks() {
             </div>
 
             {/* No Books Found */}
-            {books.length === 0 && !isLoading && (
+            {searchResults.length === 0 && !searchLoading && !localLoading && (
               <div className="bg-white rounded-lg shadow-md p-12 text-center">
+                <BookOpen className="w-16 h-16 text-gray-400 mx-auto mb-4" />
                 <h3 className="text-2xl font-bold text-gray-700 mb-4">No books found</h3>
                 <p className="text-gray-600 mb-6">Try adjusting your search or filters.</p>
+                <button
+                  onClick={clearAllFilters}
+                  className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700"
+                >
+                  Clear Filters
+                </button>
               </div>
             )}
 

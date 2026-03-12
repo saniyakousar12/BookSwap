@@ -36,6 +36,9 @@ public class User {
     @Column(nullable = false)
     private Boolean isActive = true;
 
+    // ADD THIS FIELD
+    private String city; // User's city for location-based features
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 

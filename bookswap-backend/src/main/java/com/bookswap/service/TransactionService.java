@@ -29,7 +29,7 @@ public class TransactionService {
     private final BookRepository bookRepository;
     private final UserRepository userRepository;
     private final BookService bookService;
-    private final NotificationService notificationService; // ADD THIS
+    private final NotificationService notificationService;
 
     // ===== REQUEST BOOK =====
     public TransactionDTO requestBook(TransactionRequestDTO request, Long requesterId) {
@@ -39,6 +39,11 @@ public class TransactionService {
         
         if (!book.getIsAvailable()) {
             throw new RuntimeException("Book is not available");
+        }
+        
+        // Check if user is trying to request their own book
+        if (book.getOwner().getId().equals(requesterId)) {
+            throw new RuntimeException("You cannot request your own book");
         }
         
         // Check if there's already a pending/active transaction
@@ -55,29 +60,6 @@ public class TransactionService {
         // Validate transaction type matches book's availability type
         validateTransactionType(book, request.getTransactionType());
         
-        // Calculate dates for borrow/rent
-        LocalDateTime startDate = request.getStartDate() != null ? 
-            request.getStartDate() : LocalDateTime.now();
-        
-        LocalDateTime endDate = null;
-        Double totalAmount = null;
-        
-        if (request.getTransactionType() == TransactionType.RENT) {
-            if (request.getRentalDays() == null || request.getRentalDays() <= 0) {
-                throw new RuntimeException("Rental days must be specified for rent transactions");
-            }
-            endDate = startDate.plusDays(request.getRentalDays());
-            
-            // Calculate total amount
-            long days = ChronoUnit.DAYS.between(startDate, endDate);
-            totalAmount = days * book.getRentalPricePerDay();
-        } else if (request.getTransactionType() == TransactionType.BORROW) {
-            if (request.getEndDate() == null) {
-                throw new RuntimeException("Return date must be specified for borrow transactions");
-            }
-            endDate = request.getEndDate();
-        }
-        
         // Create transaction
         User requester = userRepository.findById(requesterId)
                 .orElseThrow(() -> new RuntimeException("User not found"));
@@ -89,22 +71,28 @@ public class TransactionService {
                 .transactionType(request.getTransactionType())
                 .status(TransactionStatus.PENDING)
                 .requestMessage(request.getRequestMessage())
-                .startDate(startDate)
-                .endDate(endDate)
-                .rentalPricePerDay(book.getRentalPricePerDay())
-                .totalAmount(totalAmount)
-                .paymentCompleted(false)
+                .startDate(LocalDateTime.now())
                 .build();
+
+        // Handle rent-specific fields
+        if (request.getTransactionType() == TransactionType.RENT) {
+            if (request.getRentalDays() == null || request.getRentalDays() <= 0) {
+                throw new RuntimeException("Rental days must be specified");
+            }
+            transaction.setEndDate(LocalDateTime.now().plusDays(request.getRentalDays()));
+            transaction.setRentalPricePerDay(book.getRentalPricePerDay());
+            transaction.setTotalAmount(book.getRentalPricePerDay() * request.getRentalDays());
+        }
         
         transaction = transactionRepository.save(transaction);
         log.info("Book request created: {} for book {} by user {}", 
                  transaction.getId(), book.getId(), requesterId);
         
-        // SEND NOTIFICATION to book owner
+        // Send notification to book owner
         try {
             notificationService.sendNewRequestNotification(transaction);
         } catch (Exception e) {
-            log.error("Failed to send notification for new request: {}", e.getMessage());
+            log.error("Failed to send notification: {}", e.getMessage());
         }
         
         return convertToDTO(transaction);
@@ -123,11 +111,11 @@ public class TransactionService {
         
         log.info("Request approved: {} by owner {}", transactionId, ownerId);
         
-        // SEND NOTIFICATION to requester
+        // Send notification to requester
         try {
             notificationService.sendRequestApprovedNotification(transaction);
         } catch (Exception e) {
-            log.error("Failed to send approval notification: {}", e.getMessage());
+            log.error("Failed to send notification: {}", e.getMessage());
         }
         
         return convertToDTO(transaction);
@@ -146,11 +134,11 @@ public class TransactionService {
         
         log.info("Request rejected: {} by owner {}", transactionId, ownerId);
         
-        // SEND NOTIFICATION to requester
+        // Send notification to requester
         try {
             notificationService.sendRequestRejectedNotification(transaction);
         } catch (Exception e) {
-            log.error("Failed to send rejection notification: {}", e.getMessage());
+            log.error("Failed to send notification: {}", e.getMessage());
         }
         
         return convertToDTO(transaction);
@@ -182,13 +170,6 @@ public class TransactionService {
         
         log.info("Transaction started: {} by user {}", transactionId, userId);
         
-        // SEND NOTIFICATION to both parties
-        try {
-            notificationService.sendTransactionStartedNotification(transaction);
-        } catch (Exception e) {
-            log.error("Failed to send transaction started notification: {}", e.getMessage());
-        }
-        
         return convertToDTO(transaction);
     }
 
@@ -218,17 +199,10 @@ public class TransactionService {
         
         log.info("Transaction completed: {} by user {}", transactionId, userId);
         
-        // SEND NOTIFICATION to both parties
-        try {
-            notificationService.sendTransactionCompletedNotification(transaction);
-        } catch (Exception e) {
-            log.error("Failed to send transaction completed notification: {}", e.getMessage());
-        }
-        
         return convertToDTO(transaction);
     }
 
-    // ===== CANCEL TRANSACTION (by requester) =====
+    // ===== CANCEL REQUEST =====
     public TransactionDTO cancelRequest(Long transactionId, Long requesterId) {
         Transaction transaction = transactionRepository.findById(transactionId)
                 .orElseThrow(() -> new RuntimeException("Transaction not found"));
@@ -246,14 +220,6 @@ public class TransactionService {
         transaction = transactionRepository.save(transaction);
         
         log.info("Request cancelled: {} by requester {}", transactionId, requesterId);
-        
-        // SEND NOTIFICATION to owner (optional)
-        try {
-            // You might want to add a notification for cancellation
-            // notificationService.sendRequestCancelledNotification(transaction);
-        } catch (Exception e) {
-            log.error("Failed to send cancellation notification: {}", e.getMessage());
-        }
         
         return convertToDTO(transaction);
     }
@@ -354,6 +320,7 @@ public class TransactionService {
     }
 
     private UserSummaryDTO convertToUserSummary(User user) {
+        if (user == null) return null;
         return UserSummaryDTO.builder()
                 .id(user.getId())
                 .firstName(user.getFirstName())
